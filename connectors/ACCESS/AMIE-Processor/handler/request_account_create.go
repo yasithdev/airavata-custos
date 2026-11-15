@@ -189,7 +189,7 @@ func (h *RequestAccountCreateHandler) ensureMembership(ctx context.Context, tx *
 			if allocation.Status != models.ACTIVE {
 				return &m.ComputeAllocationMembership, nil
 			}
-			return reactivate(ctx, tx, h.svc, m.ComputeAllocationMembership)
+			return h.svc.SetMembershipEnabledTx(ctx, tx, m.ID, true)
 		}
 	}
 	return h.svc.CreateComputeAllocationMembership(ctx, &models.ComputeAllocationMembership{

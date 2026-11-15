@@ -227,3 +227,22 @@ func (s *Service) desiredStorages(ctx context.Context, tx *sql.Tx, scope store.S
 	slices.SortFunc(desired, func(a, b models.Storage) int { return strings.Compare(a.Path, b.Path) })
 	return desired, nil
 }
+
+// purgeStorages deletes the owners' storages and publishes the deletion of each not under another, since a connector
+// removes a storage with what is under it.
+func (s *Service) purgeStorages(ctx context.Context, tx *sql.Tx, scope store.StorageScope) error {
+	purged, err := s.storages.Purge(ctx, tx, scope)
+	if err != nil {
+		return err
+	}
+	var rootPaths []string
+	for _, st := range purged {
+		if !slices.ContainsFunc(rootPaths, func(rootPath string) bool { return strings.HasPrefix(st.Path, rootPath+"/") }) {
+			rootPaths = append(rootPaths, st.Path)
+			if err := s.eventBus.Publish(ctx, tx, events.StorageDeleteEvent, st); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

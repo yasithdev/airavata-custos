@@ -84,56 +84,19 @@ func (h *RequestProjectReactivateHandler) Handle(ctx context.Context, tx *sql.Tx
 		return fmt.Errorf("request_project_reactivate: audit REACTIVATE_PROJECT: %w", err)
 	}
 
-	if err := h.reactivateAllocationsAndPI(ctx, tx, packet, eventID, project); err != nil {
-		return err
+	allocations, err := setProjectAllocationsEnabled(ctx, tx, h.svc, project.ID, true, "Reactivated by AMIE request_project_reactivate")
+	if err != nil {
+		return fmt.Errorf("request_project_reactivate: enable allocations: %w", err)
+	}
+	memberships, err := setMembershipsEnabled(ctx, tx, h.svc, allocations, true, func(userID string) bool { return userID == project.ProjectPIID })
+	if err != nil {
+		return fmt.Errorf("request_project_reactivate: enable PI memberships: %w", err)
+	}
+	if err := auditMemberships(ctx, tx, h.auditSvc, packet.ID, eventID, model.AuditReactivateMembership, memberships); err != nil {
+		return fmt.Errorf("request_project_reactivate: %w", err)
 	}
 
 	return h.reply(ctx, tx, packet, eventID, projectID)
-}
-
-// reactivateAllocationsAndPI flips every ComputeAllocation under the project
-// back to ACTIVE, writes a status-change Diff per allocation, and reactivates
-// only the PI's membership on each allocation. Other members stay INACTIVE
-// until their own request_account_reactivate arrives.
-func (h *RequestProjectReactivateHandler) reactivateAllocationsAndPI(ctx context.Context, tx *sql.Tx, packet *model.Packet, eventID string, project *models.Project) error {
-	allocations, err := h.svc.ListComputeAllocationsByProject(ctx, project.ID)
-	if err != nil {
-		return fmt.Errorf("list allocations: %w", err)
-	}
-	for _, a := range allocations {
-		a.Status = models.ACTIVE
-		if err := h.svc.UpdateComputeAllocationTx(ctx, tx, &a); err != nil {
-			return fmt.Errorf("reactivate allocation %s: %w", a.ID, err)
-		}
-		if _, err := h.svc.CreateComputeAllocationDiffTx(ctx, tx, &models.ComputeAllocationDiff{
-			ComputeAllocationID: a.ID,
-			DiffType:            "ALLOCATION_STATUS_CHANGE",
-			Status:              models.ACTIVE,
-			Description:         "Reactivated by AMIE request_project_reactivate",
-		}); err != nil {
-			return fmt.Errorf("record reactivate diff for %s: %w", a.ID, err)
-		}
-		if project.ProjectPIID == "" {
-			continue
-		}
-		members, err := h.svc.ListMembersForAllocation(ctx, a.ID)
-		if err != nil {
-			return fmt.Errorf("list memberships for allocation %s: %w", a.ID, err)
-		}
-		for _, m := range members {
-			if m.UserID != project.ProjectPIID {
-				continue
-			}
-			if _, err := h.svc.UpdateMembershipStatusTx(ctx, tx, m.ID, models.ACTIVE); err != nil {
-				return fmt.Errorf("reactivate PI membership %s: %w", m.ID, err)
-			}
-			if err := h.auditSvc.Log(ctx, tx, packet.ID, eventID, model.AuditReactivateMembership, "compute_allocation_membership", m.ID,
-				fmt.Sprintf("PI user=%s allocation=%s", m.UserID, a.ID)); err != nil {
-				return fmt.Errorf("audit REACTIVATE_MEMBERSHIP for %s: %w", m.ID, err)
-			}
-		}
-	}
-	return nil
 }
 
 func (h *RequestProjectReactivateHandler) reply(ctx context.Context, tx *sql.Tx, packet *model.Packet, eventID, projectID string) error {

@@ -387,23 +387,32 @@ func (s *Service) DeleteComputeClusterUser(ctx context.Context, id string) error
 	if id == "" {
 		return fmt.Errorf("%w: compute cluster user id is required", ErrInvalidInput)
 	}
-	cu, err := s.clusterUsers.FindByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("lookup compute cluster user: %w", err)
-	}
-	if cu == nil {
-		return ErrNotFound
-	}
 	if err := s.inTx(ctx, func(tx *sql.Tx) error {
-		if err := s.clusterUsers.Delete(ctx, tx, id); err != nil {
+		cu, err := s.clusterUsers.FindByIDTx(ctx, tx, id)
+		if err != nil {
 			return err
 		}
-		if err := s.ensureStoragesTx(ctx, tx, store.StorageScope{ClusterID: cu.ComputeClusterID}); err != nil {
-			return err
+		if cu == nil {
+			return ErrNotFound
 		}
-		return s.eventBus.Publish(ctx, tx, events.ComputeClusterUserDeleteEvent, cu)
+		if cu.ProvisionedAt != nil {
+			return fmt.Errorf("%w: compute cluster user %q is provisioned, deactivate its user first", ErrInUse, id)
+		}
+		return s.deleteComputeClusterUserTx(ctx, tx, cu)
 	}); err != nil {
 		return fmt.Errorf("delete compute cluster user: %w", err)
 	}
 	return nil
+}
+
+// deleteComputeClusterUserTx purges an account's storages, deletes the account and publishes its deletion. The storages go first,
+// since storageInScope finds them through the account.
+func (s *Service) deleteComputeClusterUserTx(ctx context.Context, tx *sql.Tx, cu *models.ComputeClusterUser) error {
+	if err := s.purgeStorages(ctx, tx, store.StorageScope{ClusterID: cu.ComputeClusterID, UserID: cu.UserID}); err != nil {
+		return err
+	}
+	if err := s.clusterUsers.Delete(ctx, tx, cu.ID); err != nil {
+		return err
+	}
+	return s.eventBus.Publish(ctx, tx, events.ComputeClusterUserDeleteEvent, cu)
 }

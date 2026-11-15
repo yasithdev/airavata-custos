@@ -50,7 +50,7 @@ func baseRARBody(personID, projectID string) map[string]any {
 func flipMembershipToInactive(t *testing.T, database *sqlx.DB, membershipID string) {
 	t.Helper()
 	svc := newTestCoreService(database)
-	if _, err := svc.UpdateMembershipStatus(context.Background(), membershipID, models.INACTIVE); err != nil {
+	if _, err := svc.SetMembershipEnabled(context.Background(), membershipID, false); err != nil {
 		t.Fatalf("flip membership to INACTIVE: %v", err)
 	}
 }

@@ -125,8 +125,14 @@ export async function addMember(
   return zPostComputeAllocationMembershipsResponse.parse(raw);
 }
 
-export async function removeMember(id: string): Promise<void> {
-  await apiFetch(`/compute-allocation-memberships/${id}`, { method: "DELETE" });
+export async function setAllocationEnabled(id: string, enabled: boolean) {
+  const body = { status: enabled ? "ACTIVE" : "INACTIVE" };
+  await apiFetch(`/compute-allocations/${id}/status`, { method: "PUT", body });
+}
+
+export async function setMemberEnabled(id: string, enabled: boolean) {
+  const body = { membership_status: enabled ? "ACTIVE" : "INACTIVE" };
+  await apiFetch(`/compute-allocation-memberships/${id}/status`, { method: "PUT", body });
 }
 
 export async function listChangeRequests(

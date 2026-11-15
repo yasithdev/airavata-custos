@@ -26,7 +26,6 @@ import (
 
 	"github.com/apache/airavata-custos/connectors/ACCESS/AMIE-Processor/model"
 	"github.com/apache/airavata-custos/internal/tracing"
-	"github.com/apache/airavata-custos/pkg/models"
 	"github.com/apache/airavata-custos/pkg/service"
 )
 
@@ -65,15 +64,12 @@ func (h *RequestAccountReactivateHandler) Handle(ctx context.Context, tx *sql.Tx
 		return err
 	}
 
-	flipped, err := flipUserMemberships(ctx, tx, h.svc, projectID, personID, models.ACTIVE)
+	memberships, err := setUserMembershipsEnabled(ctx, tx, h.svc, projectID, personID, true)
 	if err != nil {
-		return fmt.Errorf("request_account_reactivate: flip memberships: %w", err)
+		return fmt.Errorf("request_account_reactivate: set memberships enabled: %w", err)
 	}
-	for _, m := range flipped {
-		if err := h.auditSvc.Log(ctx, tx, packet.ID, eventID, model.AuditReactivateMembership, "compute_allocation_membership", m.ID,
-			fmt.Sprintf("user=%s allocation=%s", m.UserID, m.ComputeAllocationID)); err != nil {
-			return fmt.Errorf("request_account_reactivate: audit REACTIVATE_MEMBERSHIP: %w", err)
-		}
+	if err := auditMemberships(ctx, tx, h.auditSvc, packet.ID, eventID, model.AuditReactivateMembership, memberships); err != nil {
+		return fmt.Errorf("request_account_reactivate: %w", err)
 	}
 
 	reply := map[string]any{

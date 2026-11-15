@@ -169,3 +169,10 @@ func (s *pgStorageStore) Delete(ctx context.Context, tx *sql.Tx, id string) (del
 		SELECT * FROM deleted ORDER BY path COLLATE "C"`, id)
 	return
 }
+
+func (s *pgStorageStore) Purge(ctx context.Context, tx *sql.Tx, scope StorageScope) (purged []models.Storage, err error) {
+	err = (&sqlx.Tx{Tx: tx, Mapper: s.db.Mapper}).SelectContext(ctx, &purged, `WITH deleted AS (DELETE FROM storages s
+		WHERE ($2 <> '' OR $3 <> '') AND `+storageInScope+` RETURNING *)
+		SELECT * FROM deleted ORDER BY path COLLATE "C"`, scope.ClusterID, scope.UserID, scope.AllocationID)
+	return
+}

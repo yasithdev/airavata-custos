@@ -451,6 +451,9 @@ var _ CoreService = &CoreServiceMock{}
 //			RevokeRoleFromUserFunc: func(ctx context.Context, userID string, roleID string, revokerID string, reason string) error {
 //				panic("mock out the RevokeRoleFromUser method")
 //			},
+//			SetMembershipEnabledFunc: func(ctx context.Context, id string, enabled bool) (*models.ComputeAllocationMembership, error) {
+//				panic("mock out the SetMembershipEnabled method")
+//			},
 //			UpdateAllocationResourceMappingFunc: func(ctx context.Context, allocationID string, resourceID string, resourceAmount int64, resourceTime int64) (*models.ComputeAllocationResourceMapping, error) {
 //				panic("mock out the UpdateAllocationResourceMapping method")
 //			},
@@ -477,9 +480,6 @@ var _ CoreService = &CoreServiceMock{}
 //			},
 //			UpdateComputeClusterUserFunc: func(ctx context.Context, cu *models.ComputeClusterUser) error {
 //				panic("mock out the UpdateComputeClusterUser method")
-//			},
-//			UpdateMembershipStatusFunc: func(ctx context.Context, id string, status models.AllocationStatus) (*models.ComputeAllocationMembership, error) {
-//				panic("mock out the UpdateMembershipStatus method")
 //			},
 //			UpdateOrganizationFunc: func(ctx context.Context, org *models.Organization) error {
 //				panic("mock out the UpdateOrganization method")
@@ -953,6 +953,9 @@ type CoreServiceMock struct {
 	// RevokeRoleFromUserFunc mocks the RevokeRoleFromUser method.
 	RevokeRoleFromUserFunc func(ctx context.Context, userID string, roleID string, revokerID string, reason string) error
 
+	// SetMembershipEnabledFunc mocks the SetMembershipEnabled method.
+	SetMembershipEnabledFunc func(ctx context.Context, id string, enabled bool) (*models.ComputeAllocationMembership, error)
+
 	// UpdateAllocationResourceMappingFunc mocks the UpdateAllocationResourceMapping method.
 	UpdateAllocationResourceMappingFunc func(ctx context.Context, allocationID string, resourceID string, resourceAmount int64, resourceTime int64) (*models.ComputeAllocationResourceMapping, error)
 
@@ -979,9 +982,6 @@ type CoreServiceMock struct {
 
 	// UpdateComputeClusterUserFunc mocks the UpdateComputeClusterUser method.
 	UpdateComputeClusterUserFunc func(ctx context.Context, cu *models.ComputeClusterUser) error
-
-	// UpdateMembershipStatusFunc mocks the UpdateMembershipStatus method.
-	UpdateMembershipStatusFunc func(ctx context.Context, id string, status models.AllocationStatus) (*models.ComputeAllocationMembership, error)
 
 	// UpdateOrganizationFunc mocks the UpdateOrganization method.
 	UpdateOrganizationFunc func(ctx context.Context, org *models.Organization) error
@@ -2122,6 +2122,15 @@ type CoreServiceMock struct {
 			// Reason is the reason argument value.
 			Reason string
 		}
+		// SetMembershipEnabled holds details about calls to the SetMembershipEnabled method.
+		SetMembershipEnabled []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ID is the id argument value.
+			ID string
+			// Enabled is the enabled argument value.
+			Enabled bool
+		}
 		// UpdateAllocationResourceMapping holds details about calls to the UpdateAllocationResourceMapping method.
 		UpdateAllocationResourceMapping []struct {
 			// Ctx is the ctx argument value.
@@ -2190,15 +2199,6 @@ type CoreServiceMock struct {
 			Ctx context.Context
 			// Cu is the cu argument value.
 			Cu *models.ComputeClusterUser
-		}
-		// UpdateMembershipStatus holds details about calls to the UpdateMembershipStatus method.
-		UpdateMembershipStatus []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// ID is the id argument value.
-			ID string
-			// Status is the status argument value.
-			Status models.AllocationStatus
 		}
 		// UpdateOrganization holds details about calls to the UpdateOrganization method.
 		UpdateOrganization []struct {
@@ -2450,6 +2450,7 @@ type CoreServiceMock struct {
 	lockResolveServiceAccount                                  sync.RWMutex
 	lockRevokePrivilege                                        sync.RWMutex
 	lockRevokeRoleFromUser                                     sync.RWMutex
+	lockSetMembershipEnabled                                   sync.RWMutex
 	lockUpdateAllocationResourceMapping                        sync.RWMutex
 	lockUpdateComputeAllocation                                sync.RWMutex
 	lockUpdateComputeAllocationChangeRequest                   sync.RWMutex
@@ -2459,7 +2460,6 @@ type CoreServiceMock struct {
 	lockUpdateComputeAllocationResourceRate                    sync.RWMutex
 	lockUpdateComputeCluster                                   sync.RWMutex
 	lockUpdateComputeClusterUser                               sync.RWMutex
-	lockUpdateMembershipStatus                                 sync.RWMutex
 	lockUpdateOrganization                                     sync.RWMutex
 	lockUpdatePendingUserEmail                                 sync.RWMutex
 	lockUpdateProject                                          sync.RWMutex
@@ -7821,6 +7821,46 @@ func (mock *CoreServiceMock) RevokeRoleFromUserCalls() []struct {
 	return calls
 }
 
+// SetMembershipEnabled calls SetMembershipEnabledFunc.
+func (mock *CoreServiceMock) SetMembershipEnabled(ctx context.Context, id string, enabled bool) (*models.ComputeAllocationMembership, error) {
+	if mock.SetMembershipEnabledFunc == nil {
+		panic("CoreServiceMock.SetMembershipEnabledFunc: method is nil but CoreService.SetMembershipEnabled was just called")
+	}
+	callInfo := struct {
+		Ctx     context.Context
+		ID      string
+		Enabled bool
+	}{
+		Ctx:     ctx,
+		ID:      id,
+		Enabled: enabled,
+	}
+	mock.lockSetMembershipEnabled.Lock()
+	mock.calls.SetMembershipEnabled = append(mock.calls.SetMembershipEnabled, callInfo)
+	mock.lockSetMembershipEnabled.Unlock()
+	return mock.SetMembershipEnabledFunc(ctx, id, enabled)
+}
+
+// SetMembershipEnabledCalls gets all the calls that were made to SetMembershipEnabled.
+// Check the length with:
+//
+//	len(mockedCoreService.SetMembershipEnabledCalls())
+func (mock *CoreServiceMock) SetMembershipEnabledCalls() []struct {
+	Ctx     context.Context
+	ID      string
+	Enabled bool
+} {
+	var calls []struct {
+		Ctx     context.Context
+		ID      string
+		Enabled bool
+	}
+	mock.lockSetMembershipEnabled.RLock()
+	calls = mock.calls.SetMembershipEnabled
+	mock.lockSetMembershipEnabled.RUnlock()
+	return calls
+}
+
 // UpdateAllocationResourceMapping calls UpdateAllocationResourceMappingFunc.
 func (mock *CoreServiceMock) UpdateAllocationResourceMapping(ctx context.Context, allocationID string, resourceID string, resourceAmount int64, resourceTime int64) (*models.ComputeAllocationResourceMapping, error) {
 	if mock.UpdateAllocationResourceMappingFunc == nil {
@@ -8154,46 +8194,6 @@ func (mock *CoreServiceMock) UpdateComputeClusterUserCalls() []struct {
 	mock.lockUpdateComputeClusterUser.RLock()
 	calls = mock.calls.UpdateComputeClusterUser
 	mock.lockUpdateComputeClusterUser.RUnlock()
-	return calls
-}
-
-// UpdateMembershipStatus calls UpdateMembershipStatusFunc.
-func (mock *CoreServiceMock) UpdateMembershipStatus(ctx context.Context, id string, status models.AllocationStatus) (*models.ComputeAllocationMembership, error) {
-	if mock.UpdateMembershipStatusFunc == nil {
-		panic("CoreServiceMock.UpdateMembershipStatusFunc: method is nil but CoreService.UpdateMembershipStatus was just called")
-	}
-	callInfo := struct {
-		Ctx    context.Context
-		ID     string
-		Status models.AllocationStatus
-	}{
-		Ctx:    ctx,
-		ID:     id,
-		Status: status,
-	}
-	mock.lockUpdateMembershipStatus.Lock()
-	mock.calls.UpdateMembershipStatus = append(mock.calls.UpdateMembershipStatus, callInfo)
-	mock.lockUpdateMembershipStatus.Unlock()
-	return mock.UpdateMembershipStatusFunc(ctx, id, status)
-}
-
-// UpdateMembershipStatusCalls gets all the calls that were made to UpdateMembershipStatus.
-// Check the length with:
-//
-//	len(mockedCoreService.UpdateMembershipStatusCalls())
-func (mock *CoreServiceMock) UpdateMembershipStatusCalls() []struct {
-	Ctx    context.Context
-	ID     string
-	Status models.AllocationStatus
-} {
-	var calls []struct {
-		Ctx    context.Context
-		ID     string
-		Status models.AllocationStatus
-	}
-	mock.lockUpdateMembershipStatus.RLock()
-	calls = mock.calls.UpdateMembershipStatus
-	mock.lockUpdateMembershipStatus.RUnlock()
 	return calls
 }
 

@@ -18,6 +18,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/apache/airavata-custos/pkg/common"
@@ -101,7 +102,7 @@ func (s *Server) updateComputeAllocationMembership(w http.ResponseWriter, r *htt
 // @Failure	400	{object}	object{error=string}
 // @Failure	404	{object}	object{error=string}
 // @Router	/compute-allocation-memberships/{id}/status [put]
-func (s *Server) updateMembershipStatus(w http.ResponseWriter, r *http.Request) {
+func (s *Server) setMembershipEnabled(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		MembershipStatus models.AllocationStatus `json:"membership_status"`
 	}
@@ -109,7 +110,11 @@ func (s *Server) updateMembershipStatus(w http.ResponseWriter, r *http.Request) 
 		common.WriteError(w, http.StatusBadRequest, err)
 		return
 	}
-	updated, err := s.svc.UpdateMembershipStatus(r.Context(), r.PathValue("id"), body.MembershipStatus)
+	if body.MembershipStatus != models.ACTIVE && body.MembershipStatus != models.INACTIVE {
+		common.WriteError(w, http.StatusBadRequest, errors.New("membership_status must be ACTIVE or INACTIVE"))
+		return
+	}
+	updated, err := s.svc.SetMembershipEnabled(r.Context(), r.PathValue("id"), body.MembershipStatus == models.ACTIVE)
 	if err != nil {
 		common.WriteServiceError(w, err)
 		return
@@ -123,6 +128,7 @@ func (s *Server) updateMembershipStatus(w http.ResponseWriter, r *http.Request) 
 // @Param	id	path	string	true	"Membership ID"
 // @Success	204	"No Content"
 // @Failure	404	{object}	object{error=string}
+// @Failure	409	{object}	object{error=string}
 // @Router	/compute-allocation-memberships/{id} [delete]
 func (s *Server) deleteComputeAllocationMembership(w http.ResponseWriter, r *http.Request) {
 	if err := s.svc.DeleteComputeAllocationMembership(r.Context(), r.PathValue("id")); err != nil {

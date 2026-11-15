@@ -50,10 +50,10 @@ func inactivateSeeded(t *testing.T, database *sqlx.DB, svc *coreservice.Service,
 	if err := svc.UpdateComputeAllocation(ctx, alloc); err != nil {
 		t.Fatalf("inactivate seeded allocation: %v", err)
 	}
-	if _, err := svc.UpdateMembershipStatus(ctx, seed.PIMembership, models.INACTIVE); err != nil {
+	if _, err := svc.SetMembershipEnabled(ctx, seed.PIMembership, false); err != nil {
 		t.Fatalf("inactivate PI membership: %v", err)
 	}
-	if _, err := svc.UpdateMembershipStatus(ctx, seed.OtherMember, models.INACTIVE); err != nil {
+	if _, err := svc.SetMembershipEnabled(ctx, seed.OtherMember, false); err != nil {
 		t.Fatalf("inactivate non-PI membership: %v", err)
 	}
 }

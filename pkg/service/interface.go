@@ -201,7 +201,7 @@ type ComputeAllocationMembershipService interface {
 	ListMembersForProject(ctx context.Context, projectID string) ([]store.ProjectMember, error)
 	ListAllocationsForUser(ctx context.Context, userID string) ([]models.ComputeAllocationMembership, error)
 	UpdateComputeAllocationMembership(ctx context.Context, m *models.ComputeAllocationMembership) (*models.ComputeAllocationMembership, error)
-	UpdateMembershipStatus(ctx context.Context, id string, status models.AllocationStatus) (*models.ComputeAllocationMembership, error)
+	SetMembershipEnabled(ctx context.Context, id string, enabled bool) (*models.ComputeAllocationMembership, error)
 	DeleteComputeAllocationMembership(ctx context.Context, id string) error
 }
 

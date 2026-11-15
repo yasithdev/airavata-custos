@@ -636,6 +636,8 @@ type StorageStore interface {
 	SetQuota(ctx context.Context, tx *sql.Tx, id string, bytes int64, until time.Time) (*models.Storage, int64, error)
 	// Delete drops a pending storage and those under it once all of them are pending, and returns them, a parent first.
 	Delete(ctx context.Context, tx *sql.Tx, id string) ([]models.Storage, error)
+	// Purge deletes and returns the storages of a scope naming a user or an allocation, a parent first.
+	Purge(ctx context.Context, tx *sql.Tx, scope StorageScope) ([]models.Storage, error)
 }
 
 // execOnce runs an update and reports whether it changed exactly one row.

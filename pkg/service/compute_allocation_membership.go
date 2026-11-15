@@ -162,7 +162,14 @@ func (s *Service) UpdateComputeAllocationMembership(ctx context.Context, m *mode
 		m.MembershipStatus = existing.MembershipStatus
 	}
 
-	if err := s.inTx(ctx, func(tx *sql.Tx) error {
+	if err := s.inTx(ctx, func(tx *sql.Tx) error { return s.UpdateComputeAllocationMembershipTx(ctx, tx, m) }); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (s *Service) UpdateComputeAllocationMembershipTx(ctx context.Context, tx *sql.Tx, m *models.ComputeAllocationMembership) error {
+	if err := func() error {
 		if err := s.memberships.Update(ctx, tx, m); err != nil {
 			return err
 		}
@@ -170,28 +177,24 @@ func (s *Service) UpdateComputeAllocationMembership(ctx context.Context, m *mode
 			return err
 		}
 		return s.eventBus.Publish(ctx, tx, events.ComputeAllocationMembershipUpdateEvent, m)
-	}); err != nil {
-		return nil, fmt.Errorf("update compute allocation membership: %w", err)
+	}(); err != nil {
+		return fmt.Errorf("update compute allocation membership: %w", err)
 	}
-	return m, nil
+	return nil
 }
 
-// UpdateMembershipStatus sets the lifecycle status (ACTIVE, INACTIVE, etc.)
-// of the membership identified by the given ID. Other fields are preserved.
-func (s *Service) UpdateMembershipStatus(ctx context.Context, id string, status models.AllocationStatus) (m *models.ComputeAllocationMembership, err error) {
+// SetMembershipEnabled makes the membership ACTIVE when enabled and INACTIVE otherwise. Other fields are preserved.
+func (s *Service) SetMembershipEnabled(ctx context.Context, id string, enabled bool) (m *models.ComputeAllocationMembership, err error) {
 	err = s.inTx(ctx, func(tx *sql.Tx) (err error) {
-		m, err = s.UpdateMembershipStatusTx(ctx, tx, id, status)
+		m, err = s.SetMembershipEnabledTx(ctx, tx, id, enabled)
 		return
 	})
 	return
 }
 
-func (s *Service) UpdateMembershipStatusTx(ctx context.Context, tx *sql.Tx, id string, status models.AllocationStatus) (*models.ComputeAllocationMembership, error) {
+func (s *Service) SetMembershipEnabledTx(ctx context.Context, tx *sql.Tx, id string, enabled bool) (*models.ComputeAllocationMembership, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: compute allocation membership id is required", ErrInvalidInput)
-	}
-	if status == "" {
-		return nil, fmt.Errorf("%w: membership_status is required", ErrInvalidInput)
 	}
 	existing, err := s.memberships.FindByIDTx(ctx, tx, id)
 	if err != nil {
@@ -200,19 +203,11 @@ func (s *Service) UpdateMembershipStatusTx(ctx context.Context, tx *sql.Tx, id s
 	if existing == nil {
 		return nil, ErrNotFound
 	}
-	existing.MembershipStatus = status
-	if err := func() error {
-		if err := s.memberships.Update(ctx, tx, existing); err != nil {
-			return err
-		}
-		if err := s.ensureStoragesTx(ctx, tx, store.StorageScope{UserID: existing.UserID, AllocationID: existing.ComputeAllocationID}); err != nil {
-			return err
-		}
-		return s.eventBus.Publish(ctx, tx, events.ComputeAllocationMembershipUpdateEvent, existing)
-	}(); err != nil {
-		return nil, fmt.Errorf("update compute allocation membership status: %w", err)
+	if existing.MembershipStatus == activeIf(enabled) {
+		return existing, nil
 	}
-	return existing, nil
+	existing.MembershipStatus = activeIf(enabled)
+	return existing, s.UpdateComputeAllocationMembershipTx(ctx, tx, existing)
 }
 
 // DeleteComputeAllocationMembership removes a membership by ID.
@@ -220,15 +215,21 @@ func (s *Service) DeleteComputeAllocationMembership(ctx context.Context, id stri
 	if id == "" {
 		return fmt.Errorf("%w: compute allocation membership id is required", ErrInvalidInput)
 	}
-	existing, err := s.memberships.FindByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("lookup compute allocation membership: %w", err)
-	}
-	if existing == nil {
-		return ErrNotFound
-	}
 	if err := s.inTx(ctx, func(tx *sql.Tx) error {
+		existing, err := s.memberships.FindByIDTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return ErrNotFound
+		}
+		if existing.MembershipStatus == models.ACTIVE {
+			return fmt.Errorf("%w: compute allocation membership %q is active, set it INACTIVE first", ErrInUse, id)
+		}
 		if err := s.memberships.Delete(ctx, tx, id); err != nil {
+			return err
+		}
+		if err := s.purgeStorages(ctx, tx, store.StorageScope{UserID: existing.UserID, AllocationID: existing.ComputeAllocationID}); err != nil {
 			return err
 		}
 		return s.eventBus.Publish(ctx, tx, events.ComputeAllocationMembershipDeleteEvent, existing)

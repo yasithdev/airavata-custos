@@ -131,7 +131,8 @@ func TestStorageLifecycle(t *testing.T) {
 		}
 		return countRows(t, database, storageCreates) - before
 	}
-	cu, err := svc.CreateComputeClusterUser(ctx(), &models.ComputeClusterUser{ComputeClusterID: cluster.ID, UserID: seedUser(t, database, uuid.NewString()+"@example.edu"), LocalUsername: "jdoe"})
+	user := seedUser(t, database, uuid.NewString()+"@example.edu")
+	cu, err := svc.CreateComputeClusterUser(ctx(), &models.ComputeClusterUser{ComputeClusterID: cluster.ID, UserID: user, LocalUsername: "jdoe", ApprovalStatus: models.ClusterAccountApproved, ReviewedBy: &user})
 	if err == nil {
 		err = svc.MarkComputeClusterUserProvisioned(ctx(), cu.ID)
 	}
@@ -190,14 +191,22 @@ func TestStorageLifecycle(t *testing.T) {
 	if err := svc.UpdateStorage(ctx(), byPath()[siblingPath].ID, 1, &until, "", "admin"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("quota on a storage without one of its own: got %v, want ErrNotFound", err)
 	}
+	if err := svc.DeleteComputeClusterUser(ctx(), cu.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("deleting a provisioned account: got %v, want ErrInUse", err)
+	}
+	_, err = svc.UpdateUserStatus(ctx(), user, models.UserSuspended)
+	if _, e := svc.SetComputeAllocationEnabled(ctx(), sibling.ID, false); errors.Join(err, e) != nil ||
+		byPath()["/home/jdoe"].Status != "pending_deletion" || byPath()[siblingPath].Status != "pending_deletion" {
+		t.Fatalf("suspending the user and deactivating the allocation: err=%v left=%+v, want theirs retired", errors.Join(err, e), byPath())
+	}
 	err = errors.Join(svc.DeleteComputeClusterUser(ctx(), cu.ID), svc.DeleteComputeAllocation(ctx(), sibling.ID))
-	if got := byPath(); err != nil || got["/home/jdoe"].Status != "pending_deletion" || got[siblingPath].Status != "pending_deletion" {
-		t.Fatalf("deleting the account and an allocation: err=%v got=%+v, want theirs retired", err, got)
+	if got := byPath(); err != nil || len(got) != 0 || countRows(t, database, "SELECT COUNT(*) FROM events WHERE event_type = 'storage::delete'") != 3 {
+		t.Fatalf("deleting the account and an allocation: err=%v left=%+v, want theirs purged", err, got)
 	}
 }
 
 // Make sure core creates a storage only once its holder is on the cluster: the account, the active allocation's group,
-// or both.
+// or both, and that a member's is retired and purged with its membership.
 func TestStoragesFollowProvisioning(t *testing.T) {
 	database := setupTestDB(t)
 	svc := newTestService(database)
@@ -210,10 +219,12 @@ func TestStoragesFollowProvisioning(t *testing.T) {
 		}
 		return cu
 	}
-	join := func(cu *models.ComputeClusterUser) {
-		if _, err := svc.CreateComputeAllocationMembership(ctx(), &models.ComputeAllocationMembership{ComputeAllocationID: alloc.ID, UserID: cu.UserID}); err != nil {
+	join := func(cu *models.ComputeClusterUser) *models.ComputeAllocationMembership {
+		m, err := svc.CreateComputeAllocationMembership(ctx(), &models.ComputeAllocationMembership{ComputeAllocationID: alloc.ID, UserID: cu.UserID})
+		if err != nil {
 			t.Fatalf("create membership: %v", err)
 		}
+		return m
 	}
 	check := func(step string, err error, want ...string) {
 		var got []string
@@ -231,14 +242,27 @@ func TestStoragesFollowProvisioning(t *testing.T) {
 	check("the group of an inactive allocation", svc.MarkComputeAllocationGroupProvisioned(ctx(), alloc.ID), "/home/early")
 	alloc.Status = models.ACTIVE
 	err := svc.UpdateComputeAllocation(ctx(), alloc)
-	check("the allocation becoming active", err, "/home/early")
+	check("the allocation becoming active", err, "/home/early", projectPath, projectPath+"/early")
 	_, err = svc.EnsureStorages(ctx(), cluster.ID)
 	check("the sweep", err, "/home/early", projectPath, projectPath+"/early")
 	err = svc.MarkComputeClusterUserProvisioned(ctx(), late.ID)
-	join(late)
+	member := join(late)
 	check("a provisioned account joining", err, "/home/early", "/home/late", projectPath, projectPath+"/early", projectPath+"/late")
 	if desired, err := svc.EnsureStorages(ctx(), cluster.ID); err != nil || len(desired) != 5 || countRows(t, database, storageCreates) != 5 {
 		t.Fatalf("ensuring again: err=%v desired=%d, want the five storages and nothing made or changed", err, len(desired))
+	}
+	var retired []string
+	_, err = svc.SetMembershipEnabled(ctx(), member.ID, false)
+	if err == nil {
+		err = database.Select(&retired, `SELECT path FROM storages WHERE status = 'pending_deletion'`)
+	}
+	if err != nil || !slices.Equal(retired, []string{projectPath + "/late"}) {
+		t.Fatalf("the membership leaving: err=%v retired=%v, want only the member's", err, retired)
+	}
+	svc.EventBus().SubscribeStorageDeleted("test-subscriber", func(context.Context, models.Storage) error { return nil })
+	if err := svc.DeleteComputeAllocationMembership(ctx(), member.ID); err != nil || countRows(t, database, "SELECT COUNT(*) FROM storages") != 4 ||
+		countRows(t, database, "SELECT COUNT(*) FROM events WHERE event_type = 'storage::delete'") != 1 {
+		t.Fatalf("deleting the membership: err=%v, want the member's storage purged", err)
 	}
 }
 

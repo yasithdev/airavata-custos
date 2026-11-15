@@ -81,49 +81,20 @@ func (h *RequestProjectInactivateHandler) Handle(ctx context.Context, tx *sql.Tx
 		return fmt.Errorf("request_project_inactivate: audit INACTIVATE_PROJECT: %w", err)
 	}
 
-	if err := h.deactivateAllocations(ctx, tx, packet, eventID, project.ID, getString(body, "Comment")); err != nil {
-		return err
+	allocations, err := setProjectAllocationsEnabled(ctx, tx, h.svc, project.ID, false,
+		describeStatusChange("Inactivated by AMIE request_project_inactivate", getString(body, "Comment")))
+	if err != nil {
+		return fmt.Errorf("request_project_inactivate: disable allocations: %w", err)
+	}
+	memberships, err := setMembershipsEnabled(ctx, tx, h.svc, allocations, false, func(string) bool { return true })
+	if err != nil {
+		return fmt.Errorf("request_project_inactivate: disable memberships: %w", err)
+	}
+	if err := auditMemberships(ctx, tx, h.auditSvc, packet.ID, eventID, model.AuditInactivateMembership, memberships); err != nil {
+		return fmt.Errorf("request_project_inactivate: %w", err)
 	}
 
 	return h.reply(ctx, tx, packet, eventID, projectID)
-}
-
-// deactivateAllocations flips every ComputeAllocation under the project to
-// INACTIVE, writes a status-change Diff per allocation, and flips every
-// ComputeAllocationMembership under those allocations to INACTIVE.
-func (h *RequestProjectInactivateHandler) deactivateAllocations(ctx context.Context, tx *sql.Tx, packet *model.Packet, eventID, projectID, comment string) error {
-	allocations, err := h.svc.ListComputeAllocationsByProject(ctx, projectID)
-	if err != nil {
-		return fmt.Errorf("list allocations: %w", err)
-	}
-	for _, a := range allocations {
-		a.Status = models.INACTIVE
-		if err := h.svc.UpdateComputeAllocationTx(ctx, tx, &a); err != nil {
-			return fmt.Errorf("inactivate allocation %s: %w", a.ID, err)
-		}
-		if _, err := h.svc.CreateComputeAllocationDiffTx(ctx, tx, &models.ComputeAllocationDiff{
-			ComputeAllocationID: a.ID,
-			DiffType:            "ALLOCATION_STATUS_CHANGE",
-			Status:              models.INACTIVE,
-			Description:         describeStatusChange("Inactivated by AMIE request_project_inactivate", comment),
-		}); err != nil {
-			return fmt.Errorf("record inactivate diff for %s: %w", a.ID, err)
-		}
-		members, err := h.svc.ListMembersForAllocation(ctx, a.ID)
-		if err != nil {
-			return fmt.Errorf("list memberships for allocation %s: %w", a.ID, err)
-		}
-		for _, m := range members {
-			if _, err := h.svc.UpdateMembershipStatusTx(ctx, tx, m.ID, models.INACTIVE); err != nil {
-				return fmt.Errorf("inactivate membership %s: %w", m.ID, err)
-			}
-			if err := h.auditSvc.Log(ctx, tx, packet.ID, eventID, model.AuditInactivateMembership, "compute_allocation_membership", m.ID,
-				fmt.Sprintf("user=%s allocation=%s", m.UserID, a.ID)); err != nil {
-				return fmt.Errorf("audit INACTIVATE_MEMBERSHIP for %s: %w", m.ID, err)
-			}
-		}
-	}
-	return nil
 }
 
 func (h *RequestProjectInactivateHandler) reply(ctx context.Context, tx *sql.Tx, packet *model.Packet, eventID, projectID string) error {

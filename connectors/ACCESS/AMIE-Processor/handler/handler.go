@@ -135,32 +135,18 @@ func ensureUserIdentity(ctx context.Context, svc *service.Service, userID, globa
 	return nil
 }
 
-// reactivate sets an existing membership back to active. The spec says a
-// create packet for a known account also reactivates it.
-func reactivate(ctx context.Context, tx *sql.Tx, svc *service.Service, m models.ComputeAllocationMembership) (*models.ComputeAllocationMembership, error) {
-	if m.MembershipStatus == models.ACTIVE {
-		return &m, nil
-	}
-	return svc.UpdateMembershipStatusTx(ctx, tx, m.ID, models.ACTIVE)
-}
-
-// flipUserMemberships flips every ComputeAllocationMembership the user holds
-// under any allocation belonging to the given project (Custos project.id) to
-// the given status. Returns the rows that were updated. Silently returns an
-// empty slice when the project or user is unknown, the reply still goes back
-// to AMIE but no state changes.
-func flipUserMemberships(ctx context.Context, tx *sql.Tx, svc *service.Service, projectID, userID string, status models.AllocationStatus) ([]models.ComputeAllocationMembership, error) {
-	project, err := svc.GetProject(ctx, projectID)
-	if err != nil {
-		if errors.Is(err, service.ErrNotFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("lookup project: %w", err)
-	}
-	allocations, err := svc.ListComputeAllocationsByProject(ctx, project.ID)
+// setUserMembershipsEnabled enables or disables the user's memberships on the project's allocations. An unknown
+// project changes nothing.
+func setUserMembershipsEnabled(ctx context.Context, tx *sql.Tx, svc *service.Service, projectID, userID string, enabled bool) ([]models.ComputeAllocationMembership, error) {
+	allocations, err := svc.ListComputeAllocationsByProject(ctx, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list allocations: %w", err)
 	}
+	return setMembershipsEnabled(ctx, tx, svc, allocations, enabled, func(memberID string) bool { return memberID == userID })
+}
+
+// setMembershipsEnabled enables or disables each membership on the allocations whose user is selected.
+func setMembershipsEnabled(ctx context.Context, tx *sql.Tx, svc *service.Service, allocations []models.ComputeAllocation, enabled bool, selected func(userID string) bool) ([]models.ComputeAllocationMembership, error) {
 	var updated []models.ComputeAllocationMembership
 	for _, a := range allocations {
 		members, err := svc.ListMembersForAllocation(ctx, a.ID)
@@ -168,17 +154,51 @@ func flipUserMemberships(ctx context.Context, tx *sql.Tx, svc *service.Service, 
 			return nil, fmt.Errorf("list memberships for allocation %s: %w", a.ID, err)
 		}
 		for _, m := range members {
-			if m.UserID != userID {
+			if !selected(m.UserID) {
 				continue
 			}
-			flipped, err := svc.UpdateMembershipStatusTx(ctx, tx, m.ID, status)
+			membership, err := svc.SetMembershipEnabledTx(ctx, tx, m.ID, enabled)
 			if err != nil {
 				return nil, fmt.Errorf("update membership %s: %w", m.ID, err)
 			}
-			updated = append(updated, *flipped)
+			updated = append(updated, *membership)
 		}
 	}
 	return updated, nil
+}
+
+// setProjectAllocationsEnabled enables or disables each allocation of the project and records a status diff.
+func setProjectAllocationsEnabled(ctx context.Context, tx *sql.Tx, svc *service.Service, projectID string, enabled bool, description string) ([]models.ComputeAllocation, error) {
+	allocations, err := svc.ListComputeAllocationsByProject(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list allocations: %w", err)
+	}
+	for _, a := range allocations {
+		updated, err := svc.SetComputeAllocationEnabledTx(ctx, tx, a.ID, enabled)
+		if err != nil {
+			return nil, fmt.Errorf("set allocation %s enabled=%t: %w", a.ID, enabled, err)
+		}
+		if _, err := svc.CreateComputeAllocationDiffTx(ctx, tx, &models.ComputeAllocationDiff{
+			ComputeAllocationID: a.ID,
+			DiffType:            "ALLOCATION_STATUS_CHANGE",
+			Status:              updated.Status,
+			Description:         description,
+		}); err != nil {
+			return nil, fmt.Errorf("record status diff for %s: %w", a.ID, err)
+		}
+	}
+	return allocations, nil
+}
+
+// auditMemberships logs action for each membership.
+func auditMemberships(ctx context.Context, tx *sql.Tx, auditSvc AuditService, packetID, eventID string, action model.AuditAction, memberships []models.ComputeAllocationMembership) error {
+	for _, m := range memberships {
+		if err := auditSvc.Log(ctx, tx, packetID, eventID, action, "compute_allocation_membership", m.ID,
+			fmt.Sprintf("user=%s allocation=%s", m.UserID, m.ComputeAllocationID)); err != nil {
+			return fmt.Errorf("audit %s for %s: %w", action, m.ID, err)
+		}
+	}
+	return nil
 }
 
 func sendReply(ctx context.Context, tx *sql.Tx, client AmieClient, auditSvc AuditService, packet *model.Packet, eventID, errPrefix string, reply map[string]any) error {

@@ -292,7 +292,7 @@ func (h *RequestProjectCreateHandler) ensurePIMembership(ctx context.Context, tx
 	}
 	for _, m := range existing {
 		if m.UserID == piID {
-			active, err := reactivate(ctx, tx, h.svc, m.ComputeAllocationMembership)
+			active, err := h.svc.SetMembershipEnabledTx(ctx, tx, m.ID, true)
 			return active, false, err
 		}
 	}

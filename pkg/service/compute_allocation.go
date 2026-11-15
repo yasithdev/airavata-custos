@@ -171,6 +171,9 @@ func (s *Service) UpdateComputeAllocationTx(ctx context.Context, tx *sql.Tx, all
 		if err := s.allocs.Update(ctx, tx, alloc); err != nil {
 			return err
 		}
+		if err := s.ensureStoragesTx(ctx, tx, store.StorageScope{AllocationID: alloc.ID}); err != nil {
+			return err
+		}
 		return s.eventBus.Publish(ctx, tx, events.ComputeAllocationUpdateEvent, alloc)
 	}(); err != nil {
 		return fmt.Errorf("update compute allocation: %w", err)
@@ -213,18 +216,21 @@ func (s *Service) DeleteComputeAllocation(ctx context.Context, id string) error 
 	if id == "" {
 		return fmt.Errorf("%w: compute allocation id is required", ErrInvalidInput)
 	}
-	alloc, err := s.allocs.FindByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("lookup compute allocation: %w", err)
-	}
-	if alloc == nil {
-		return ErrNotFound
-	}
 	if err := s.inTx(ctx, func(tx *sql.Tx) error {
+		alloc, err := s.allocs.FindByIDTx(ctx, tx, id, store.UpdateLock)
+		if err != nil {
+			return err
+		}
+		if alloc == nil {
+			return ErrNotFound
+		}
+		if alloc.Status == models.ACTIVE {
+			return fmt.Errorf("%w: compute allocation %q is active, set it INACTIVE first", ErrInUse, id)
+		}
 		if err := s.allocs.Delete(ctx, tx, id); err != nil {
 			return err
 		}
-		if err := s.ensureStoragesTx(ctx, tx, store.StorageScope{ClusterID: alloc.ComputeClusterID}); err != nil {
+		if err := s.purgeStorages(ctx, tx, store.StorageScope{AllocationID: alloc.ID}); err != nil {
 			return err
 		}
 		return s.eventBus.Publish(ctx, tx, events.ComputeAllocationDeleteEvent, alloc)
@@ -232,4 +238,36 @@ func (s *Service) DeleteComputeAllocation(ctx context.Context, id string) error 
 		return fmt.Errorf("delete compute allocation: %w", err)
 	}
 	return nil
+}
+
+// SetComputeAllocationEnabled makes an allocation ACTIVE when enabled and INACTIVE otherwise; disabling ends its members' access.
+func (s *Service) SetComputeAllocationEnabled(ctx context.Context, id string, enabled bool) (alloc *models.ComputeAllocation, err error) {
+	err = s.inTx(ctx, func(tx *sql.Tx) (err error) {
+		alloc, err = s.SetComputeAllocationEnabledTx(ctx, tx, id, enabled)
+		return
+	})
+	return
+}
+
+func (s *Service) SetComputeAllocationEnabledTx(ctx context.Context, tx *sql.Tx, id string, enabled bool) (*models.ComputeAllocation, error) {
+	alloc, err := s.allocs.FindByIDTx(ctx, tx, id, store.UpdateLock)
+	if err != nil {
+		return nil, fmt.Errorf("lookup compute allocation: %w", err)
+	}
+	if alloc == nil {
+		return nil, ErrNotFound
+	}
+	if alloc.Status == activeIf(enabled) {
+		return alloc, nil
+	}
+	alloc.Status = activeIf(enabled)
+	return alloc, s.UpdateComputeAllocationTx(ctx, tx, alloc)
+}
+
+// activeIf returns ACTIVE when enabled and INACTIVE otherwise.
+func activeIf(enabled bool) models.AllocationStatus {
+	if enabled {
+		return models.ACTIVE
+	}
+	return models.INACTIVE
 }

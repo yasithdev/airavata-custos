@@ -56,12 +56,14 @@ Core makes or changes storages and publishes `storage::create` for each, a paren
 | When | Then |
 |---|---|
 | A user leaves `ACTIVE` | Retires their accounts' `user_home`, `user_scratch` and `project_user` storages |
-| An account is deleted | Retires its `user_home`, `user_scratch` and `project_user` storages |
-| An allocation is deleted | Retires its `project`, `project_shared` and `project_user` storages |
+| An allocation is set `INACTIVE` | Retires its `project`, `project_shared` and `project_user` storages |
+| A membership is set `INACTIVE` | Retires that member's `project_user` |
+| An account, allocation or membership is deleted | Purges the same storages; an active allocation or membership, or a provisioned account, returns 409 |
 
 Making storages also retires those of the same holders the targets no longer give, so a sweep retires every storage
 left without a holder. Retiring marks storages `pending_deletion` for an administrator to review, and a provision or
 sweep restores them.
+Purging deletes them and publishes `storage::delete` for each storage not under another.
 
 | Route | Privilege | Purpose |
 |---|---|---|

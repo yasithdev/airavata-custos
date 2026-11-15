@@ -69,3 +69,29 @@ func TestSetAllocationResources_ReplacesTheSet(t *testing.T) {
 		t.Errorf("attached: got %v, want %s and %s", got, b, c)
 	}
 }
+
+// Make sure deleting an active membership or allocation is refused until it is INACTIVE.
+func TestDeleteAllocationAndMembership_RefusedWhileActive(t *testing.T) {
+	database := setupTestDB(t)
+	svc := newTestService(database)
+	_, allocID := newClusterAllocation(t, svc, seedUser(t, database, uuid.NewString()+"@example.edu"))
+	m, _ := svc.CreateComputeAllocationMembership(ctx(), &models.ComputeAllocationMembership{ComputeAllocationID: allocID, UserID: seedUser(t, database, uuid.NewString()+"@example.edu"), MembershipStatus: models.ACTIVE})
+	if err := svc.DeleteComputeAllocationMembership(ctx(), m.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("delete active membership: %v, want ErrInUse", err)
+	}
+	if _, err := svc.SetMembershipEnabled(ctx(), m.ID, false); err != nil {
+		t.Fatalf("set membership INACTIVE: %v", err)
+	}
+	if err := svc.DeleteComputeAllocationMembership(ctx(), m.ID); err != nil {
+		t.Fatalf("delete inactive membership: %v", err)
+	}
+	if err := svc.DeleteComputeAllocation(ctx(), allocID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("delete while active: %v, want ErrInUse", err)
+	}
+	if _, err := svc.SetComputeAllocationEnabled(ctx(), allocID, false); err != nil {
+		t.Fatalf("set INACTIVE: %v", err)
+	}
+	if err := svc.DeleteComputeAllocation(ctx(), allocID); err != nil {
+		t.Fatalf("delete while inactive: %v", err)
+	}
+}
