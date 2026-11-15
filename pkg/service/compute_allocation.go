@@ -199,6 +199,9 @@ func (s *Service) markGroupProvisionedTx(ctx context.Context, tx *sql.Tx, alloc 
 		return err
 	}
 	alloc.GroupProvisionedAt = &now
+	if err := s.ensureStoragesTx(ctx, tx, store.StorageScope{AllocationID: alloc.ID}); err != nil {
+		return err
+	}
 	if err := s.eventBus.Publish(ctx, tx, events.ComputeAllocationGroupProvisionEvent, alloc); err != nil {
 		return err
 	}
@@ -219,6 +222,9 @@ func (s *Service) DeleteComputeAllocation(ctx context.Context, id string) error 
 	}
 	if err := s.inTx(ctx, func(tx *sql.Tx) error {
 		if err := s.allocs.Delete(ctx, tx, id); err != nil {
+			return err
+		}
+		if err := s.ensureStoragesTx(ctx, tx, store.StorageScope{ClusterID: alloc.ComputeClusterID}); err != nil {
 			return err
 		}
 		return s.eventBus.Publish(ctx, tx, events.ComputeAllocationDeleteEvent, alloc)

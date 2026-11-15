@@ -613,6 +613,29 @@ type ComputeAllocationUsageStore interface {
 	Delete(ctx context.Context, tx *sql.Tx, id string) error
 }
 
+// StorageStore keeps each cluster's storages.
+type StorageStore interface {
+	// List returns every cluster's storages, pending ones first.
+	List(ctx context.Context) ([]models.Storage, error)
+	// LockScope locks the scope's account, then its allocations, so writers of one scope queue. A scope naming neither locks nothing.
+	LockScope(ctx context.Context, tx *sql.Tx, scope StorageScope) error
+	// AccountHolders returns the scope's provisioned accounts.
+	AccountHolders(ctx context.Context, tx *sql.Tx, scope StorageScope) ([]StorageHolder, error)
+	// AllocationHolders returns the scope's active allocations with a provisioned group.
+	AllocationHolders(ctx context.Context, tx *sql.Tx, scope StorageScope) ([]StorageHolder, error)
+	// MemberHolders returns the scope's active memberships whose account and allocation both qualify.
+	MemberHolders(ctx context.Context, tx *sql.Tx, scope StorageScope) ([]StorageHolder, error)
+	// Retire marks the scope's active storages on the clusters pending deletion, except the kept ones.
+	Retire(ctx context.Context, tx *sql.Tx, scope StorageScope, claimedClusterIDs []string, desired []models.Storage) error
+	// Upsert makes st, or updates and activates the storage at its path, keeping an administrator's quota until it lapses.
+	// It returns the row when it made or changed it, and nil otherwise.
+	Upsert(ctx context.Context, tx *sql.Tx, st models.Storage) (*models.Storage, error)
+	// SetQuota replaces the quota of a storage that has one of its own, and returns the storage and its old quota; nil without one.
+	SetQuota(ctx context.Context, tx *sql.Tx, id string, bytes int64, until time.Time) (*models.Storage, int64, error)
+	// Delete drops a pending storage and those under it once all of them are pending, and returns them, a parent first.
+	Delete(ctx context.Context, tx *sql.Tx, id string) ([]models.Storage, error)
+}
+
 // execOnce runs an update and reports whether it changed exactly one row.
 func execOnce(ctx context.Context, tx *sql.Tx, query string, args ...any) (bool, error) {
 	res, err := tx.ExecContext(ctx, query, args...)

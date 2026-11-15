@@ -107,6 +107,7 @@ core:
 | `core.auth.oidc.audience`       | required | Expected `aud` claim, usually the client ID registered with the provider. Empty → boot fails with `core.auth.oidc.audience is required`.                                                       |
 | `core.auth.cache_ttl`           | `30s`    | How long a resolved caller and its privileges stay cached. A Go duration such as `30s` or `1m`. Zero or negative → `30s`. Above `60s` → capped at `60s` with a warning.                        |
 | `core.users.reserved_usernames` | empty    | Names a user cannot choose as their cluster login. The sample lists system, service and distribution accounts.                                                                                 |
+| `core.storage.clusters`         | empty    | Each cluster's storage targets, made by a storage connector. See [storage](docs/storage.md).                                                                                                   |
 
 ## Connectors
 
