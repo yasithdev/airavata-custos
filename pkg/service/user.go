@@ -203,8 +203,10 @@ func (s *Service) UpdateUserStatus(ctx context.Context, id string, status models
 	if id == "" {
 		return nil, fmt.Errorf("%w: user id is required", ErrInvalidInput)
 	}
-	if status == "" {
-		return nil, fmt.Errorf("%w: status is required", ErrInvalidInput)
+	switch status {
+	case models.UserPending, models.UserActive, models.UserInactive, models.UserSuspended, models.UserMerged:
+	default:
+		return nil, fmt.Errorf("%w: status must be PENDING, ACTIVE, INACTIVE, SUSPENDED or MERGED", ErrInvalidInput)
 	}
 	var existing *models.User
 	if err := s.inTx(ctx, func(tx *sql.Tx) (err error) {
@@ -213,6 +215,9 @@ func (s *Service) UpdateUserStatus(ctx context.Context, id string, status models
 		}
 		if existing == nil {
 			return ErrNotFound
+		}
+		if existing.Status == models.UserMerged {
+			return fmt.Errorf("%w: user %q is merged", ErrInvalidInput, id)
 		}
 		wasActive := existing.Status == models.UserActive
 		existing.Status = status
