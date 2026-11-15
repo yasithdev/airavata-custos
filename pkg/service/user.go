@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/apache/airavata-custos/internal/store"
 	"github.com/apache/airavata-custos/pkg/events"
 	"github.com/apache/airavata-custos/pkg/models"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -144,8 +145,7 @@ func (s *Service) ListUsersByOrganization(ctx context.Context, organizationID st
 	return users, nil
 }
 
-// UpdateUser persists changes to an existing user. Fields left blank/zero on
-// the supplied record fall back to the stored value.
+// UpdateUser saves an existing user's fields other than status; a blank field keeps the stored value.
 func (s *Service) UpdateUser(ctx context.Context, user *models.User) error {
 	if user == nil || user.ID == "" {
 		return fmt.Errorf("%w: user id is required", ErrInvalidInput)
@@ -181,9 +181,7 @@ func (s *Service) UpdateUser(ctx context.Context, user *models.User) error {
 	if user.Email == "" {
 		user.Email = existing.Email
 	}
-	if user.Status == "" {
-		user.Status = existing.Status
-	}
+	user.Status = existing.Status
 	if user.Type == "" {
 		user.Type = existing.Type
 	}
@@ -208,24 +206,54 @@ func (s *Service) UpdateUserStatus(ctx context.Context, id string, status models
 	if status == "" {
 		return nil, fmt.Errorf("%w: status is required", ErrInvalidInput)
 	}
-	existing, err := s.users.FindByID(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("lookup user: %w", err)
-	}
-	if existing == nil {
-		return nil, ErrNotFound
-	}
-	existing.Status = status
-	if err := s.inTx(ctx, func(tx *sql.Tx) error {
+	var existing *models.User
+	if err := s.inTx(ctx, func(tx *sql.Tx) (err error) {
+		if existing, err = s.users.FindByIDTx(ctx, tx, id, store.NoKeyUpdateLock); err != nil {
+			return fmt.Errorf("lookup user: %w", err)
+		}
+		if existing == nil {
+			return ErrNotFound
+		}
+		wasActive := existing.Status == models.UserActive
+		existing.Status = status
 		if err := s.users.UpdateStatus(ctx, tx, id, status); err != nil {
 			return err
 		}
-		return s.eventBus.Publish(ctx, tx, events.UserUpdateEvent, existing)
+		if err := s.eventBus.Publish(ctx, tx, events.UserUpdateEvent, existing); err != nil {
+			return err
+		}
+		if nowActive := status == models.UserActive; nowActive != wasActive {
+			return s.setUserAccountsEnabledTx(ctx, tx, id, nowActive)
+		}
+		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("update user status: %w", err)
 	}
 	s.InvalidateAllIdentities()
 	return existing, nil
+}
+
+// setUserAccountsEnabledTx republishes the user's approved accounts, unprovisioned unless enabled, and ensures their storages.
+func (s *Service) setUserAccountsEnabledTx(ctx context.Context, tx *sql.Tx, userID string, enabled bool) error {
+	accounts, err := s.clusterUsers.FindByUserTx(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	for _, cu := range accounts {
+		if cu.ApprovalStatus != models.ClusterAccountApproved {
+			continue
+		}
+		if !enabled {
+			if err := s.clusterUsers.ClearProvisioned(ctx, tx, cu.ID); err != nil {
+				return err
+			}
+			cu.ProvisionedAt = nil
+		}
+		if err := s.eventBus.Publish(ctx, tx, events.ComputeClusterUserUpdateEvent, cu); err != nil {
+			return err
+		}
+	}
+	return s.ensureStoragesTx(ctx, tx, store.StorageScope{UserID: userID})
 }
 
 const (

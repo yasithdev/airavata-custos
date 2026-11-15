@@ -55,6 +55,7 @@ Core makes or changes storages and publishes `storage::create` for each, a paren
 
 | When | Then |
 |---|---|
+| A user leaves `ACTIVE` | Retires their accounts' `user_home`, `user_scratch` and `project_user` storages |
 | An account is deleted | Retires its `user_home`, `user_scratch` and `project_user` storages |
 | An allocation is deleted | Retires its `project`, `project_shared` and `project_user` storages |
 

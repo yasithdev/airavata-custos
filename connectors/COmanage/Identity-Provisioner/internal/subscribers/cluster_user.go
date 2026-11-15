@@ -34,9 +34,9 @@ import (
 	"github.com/apache/airavata-custos/pkg/service"
 )
 
-// Subscriber drives the orchestrator from three events,
-// ComputeClusterUserApproveEvent, ComputeClusterUserDeleteEvent, and UserOnboardedEvent.
-// Both are ignored if the user doesn't have a cluster account on `CustosClusterID`.
+// Subscriber drives the orchestrator from four events, ComputeClusterUserApproveEvent,
+// ComputeClusterUserUpdateEvent, ComputeClusterUserDeleteEvent, and UserOnboardedEvent.
+// Each is ignored if the user doesn't have a cluster account on `CustosClusterID`.
 type Subscriber struct {
 	ops             provisioner
 	bus             *events.Bus
@@ -48,6 +48,7 @@ type Subscriber struct {
 type provisioner interface {
 	EnsureClusterAccount(ctx context.Context, cu *models.ComputeClusterUser) error
 	RemoveClusterAccount(ctx context.Context, cu *models.ComputeClusterUser) error
+	SuspendClusterAccount(ctx context.Context, cu *models.ComputeClusterUser) error
 	EnsureClusterAdminMembership(ctx context.Context, cu *models.ComputeClusterUser) error
 	EnsureAllocationGroup(ctx context.Context, a *models.ComputeAllocation) error
 	RemoveAllocationGroup(ctx context.Context, a *models.ComputeAllocation) error
@@ -68,6 +69,7 @@ func (s *Subscriber) RegisterSubscribers(subscriber string) {
 	// Whichever of the `approve event` and the `onboarded event` comes second starts it.
 	s.bus.SubscribeComputeClusterUserApproved(subscriber, s.handleClusterUserApproved)
 	s.bus.SubscribeComputeClusterUserDeleted(subscriber, s.handleClusterUserDeleted)
+	s.bus.SubscribeComputeClusterUserUpdated(subscriber, s.handleClusterUserUpdated)
 	s.bus.SubscribeUserOnboarded(subscriber, s.handleUserOnboarded)
 
 	s.bus.SubscribeComputeAllocationCreated(subscriber, s.handleComputeAllocationChanged)
@@ -76,6 +78,43 @@ func (s *Subscriber) RegisterSubscribers(subscriber string) {
 	s.bus.SubscribeComputeAllocationMembershipCreated(subscriber, s.handleMembershipChanged)
 	s.bus.SubscribeComputeAllocationMembershipUpdated(subscriber, s.handleMembershipChanged)
 	s.bus.SubscribeComputeAllocationMembershipDeleted(subscriber, s.handleMembershipChanged)
+}
+
+// handleClusterUserUpdated provisions the account of an ACTIVE user, and otherwise updates its status and leaves its allocation groups.
+func (s *Subscriber) handleClusterUserUpdated(ctx context.Context, req models.ComputeClusterUser) error {
+	if req.ComputeClusterID != s.custosClusterID {
+		return nil
+	}
+	cu, err := s.core.GetComputeClusterUser(ctx, req.ID)
+	if errors.Is(err, service.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	active, err := s.isUserActive(ctx, cu.UserID)
+	if err != nil {
+		return err
+	}
+	if active {
+		return s.handleClusterUserApproved(ctx, *cu)
+	}
+	ctx = audit.WithSource(ctx, "comanage")
+	ctx, span := tracing.Start(ctx, "comanage.cluster_user_updated")
+	defer span.End()
+	if err := s.ops.SuspendClusterAccount(ctx, cu); err != nil {
+		return err
+	}
+	return s.syncUserAllocations(ctx, cu.UserID)
+}
+
+// isUserActive re-reads the user, so a retried event sees a status change made since it was published.
+func (s *Subscriber) isUserActive(ctx context.Context, userID string) (bool, error) {
+	u, err := s.core.GetUser(ctx, userID)
+	if errors.Is(err, service.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil && u.Status == models.UserActive, err
 }
 
 // handleClusterUserDeleted removes the account from the registry.
@@ -113,6 +152,9 @@ func (s *Subscriber) handleUserOnboarded(ctx context.Context, user models.User) 
 		slog.ErrorContext(ctx, "comanage subscriber: cluster user lookup failed", "user_id", user.ID, "err", err)
 		return err
 	}
+	if active, err := s.isUserActive(ctx, user.ID); err != nil || !active {
+		return err
+	}
 	if err := s.ops.EnsureClusterAccount(ctx, cu); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -136,6 +178,9 @@ func (s *Subscriber) handleClusterUserApproved(ctx context.Context, cu models.Co
 
 	if cu.ComputeClusterID != s.custosClusterID {
 		return nil
+	}
+	if active, err := s.isUserActive(ctx, cu.UserID); err != nil || !active {
+		return err
 	}
 	span.SetAttributes(
 		attribute.String("comanage.cluster_user_id", cu.ID),

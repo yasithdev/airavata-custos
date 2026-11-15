@@ -19,6 +19,7 @@ package operations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -45,25 +46,17 @@ func (o *Orchestrator) RemoveClusterAccount(ctx context.Context, cu *models.Comp
 		}
 	}()
 
-	user, err := o.core.GetUser(ctx, cu.UserID)
-	if err != nil {
-		return fmt.Errorf("get Custos user: %w", err)
-	}
-	personID, composite, err := o.findCoPerson(ctx, user)
+	groupID, personID, composite, err := o.findAccountCoPerson(ctx, cu)
 	if err != nil {
 		return err
 	}
 	if personID != "" {
-		if err := o.removeAccountFromPerson(ctx, cu, personID, composite); err != nil {
+		if err := o.revokePersonAccount(ctx, cu, personID, composite, removeLogin); err != nil {
 			return err
 		}
 	}
 
 	// The account names this group as its primary group, so it goes last.
-	groupID, err := o.c.FindCoGroupByName(cu.LocalUsername)
-	if err != nil {
-		return fmt.Errorf("find primary group: %w", err)
-	}
 	if groupID != 0 {
 		if err := o.removeCoGroup(groupID); err != nil {
 			return err
@@ -74,16 +67,49 @@ func (o *Orchestrator) RemoveClusterAccount(ctx context.Context, cu *models.Comp
 	return nil
 }
 
-// removeAccountFromPerson takes the cluster account, its login name and the
-// admin group membership off the person. The person record itself stays.
-func (o *Orchestrator) removeAccountFromPerson(ctx context.Context, cu *models.ComputeClusterUser, personID string, composite []byte) error {
-	body, changed, err := removeLogin(composite, cu.LocalUsername)
+// findAccountCoPerson returns the account's primary group, 0 if none, and the person holding the account, "" if none.
+func (o *Orchestrator) findAccountCoPerson(ctx context.Context, cu *models.ComputeClusterUser) (int, string, []byte, error) {
+	groupID, err := o.c.FindCoGroupByName(cu.LocalUsername)
+	if err != nil {
+		return 0, "", nil, fmt.Errorf("find primary group: %w", err)
+	}
+	// A user merge can leave the stored person id on another user, so the group's member comes first.
+	if groupID != 0 {
+		// shortcut: takes the first member, a primary group has one unless provisioning was retried against another person.
+		members, err := o.c.ListCoGroupMembers(groupID)
+		if err != nil {
+			return 0, "", nil, err
+		}
+		if len(members) > 0 {
+			personID, err := o.c.FindIdentifierValueOnPerson(members[0].Person.Id, o.c.Config().PersonIDType)
+			if err != nil {
+				return 0, "", nil, err
+			}
+			if personID != "" {
+				composite, err := o.c.GetPersonComposite(personID)
+				return groupID, personID, composite, err
+			}
+		}
+	}
+	user, err := o.core.GetUser(ctx, cu.UserID)
+	if err != nil {
+		return 0, "", nil, fmt.Errorf("get Custos user: %w", err)
+	}
+	personID, composite, err := o.findCoPerson(ctx, user)
+	return groupID, personID, composite, err
+}
+
+// revokePersonAccount applies edit to the person's cluster account and takes the person
+// out of the admin group. The person record itself stays.
+func (o *Orchestrator) revokePersonAccount(ctx context.Context, cu *models.ComputeClusterUser, personID string, composite []byte,
+	edit func(json.RawMessage, string) ([]byte, bool, error)) error {
+	body, changed, err := edit(composite, cu.LocalUsername)
 	if err != nil {
 		return err
 	}
 	if changed {
 		if err := o.updatePerson(ctx, personID, body); err != nil {
-			return fmt.Errorf("remove account from person: %w", err)
+			return fmt.Errorf("update person: %w", err)
 		}
 	}
 
@@ -113,6 +139,19 @@ func (o *Orchestrator) removeAccountFromPerson(ctx context.Context, cu *models.C
 	if err := ignoreNotFound(o.c.DeleteCoGroupMember(memberID)); err != nil {
 		return fmt.Errorf("delete cluster admin membership: %w", err)
 	}
+	return nil
+}
+
+// SuspendClusterAccount suspends the account in the registry and leaves the admin group; the account stays.
+func (o *Orchestrator) SuspendClusterAccount(ctx context.Context, cu *models.ComputeClusterUser) error {
+	_, personID, composite, err := o.findAccountCoPerson(ctx, cu)
+	if err != nil || personID == "" {
+		return err
+	}
+	if err := o.revokePersonAccount(ctx, cu, personID, composite, suspendLogin); err != nil {
+		return err
+	}
+	o.audit(ctx, cu, "ComanageClusterAccountSuspended", fmt.Sprintf("comanage_id=%s username=%s status=S", personID, cu.LocalUsername))
 	return nil
 }
 

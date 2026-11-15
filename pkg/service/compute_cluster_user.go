@@ -346,7 +346,7 @@ func (s *Service) UpdateComputeClusterUser(ctx context.Context, cu *models.Compu
 	return nil
 }
 
-// MarkComputeClusterUserProvisioned stamps provisioned_at on the mapping, signaling that the account exists in the registry.
+// MarkComputeClusterUserProvisioned stamps provisioned_at on the mapping, signaling that the account has access in the registry.
 // It first runs once an admin approves the cluster account, and again on the user's first sign-in
 // and on retries, so provisioned_at is stamped and the provision event published only the first time.
 func (s *Service) MarkComputeClusterUserProvisioned(ctx context.Context, id string) error {
